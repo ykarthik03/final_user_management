@@ -7,6 +7,7 @@ import uuid
 import re
 from app.models.user_model import UserRole
 from app.utils.nickname_gen import generate_nickname
+from app.utils.url_validation import validate_github_url, validate_linkedin_url, validate_profile_picture_url
 
 
 def validate_url(url: Optional[str]) -> Optional[str]:
@@ -16,6 +17,33 @@ def validate_url(url: Optional[str]) -> Optional[str]:
     if not re.match(url_regex, url):
         raise ValueError('Invalid URL format')
     return url
+
+def validate_github_url_schema(cls, v: Optional[str]) -> Optional[str]:
+    """Validate GitHub profile URL using the specialized validation function."""
+    if v is None or v.strip() == "":
+        return v
+    is_valid, error_msg = validate_github_url(v)
+    if not is_valid:
+        raise ValueError(error_msg)
+    return v
+
+def validate_linkedin_url_schema(cls, v: Optional[str]) -> Optional[str]:
+    """Validate LinkedIn profile URL using the specialized validation function."""
+    if v is None or v.strip() == "":
+        return v
+    is_valid, error_msg = validate_linkedin_url(v)
+    if not is_valid:
+        raise ValueError(error_msg)
+    return v
+
+def validate_profile_picture_url_schema(cls, v: Optional[str]) -> Optional[str]:
+    """Validate profile picture URL using the specialized validation function."""
+    if v is None or v.strip() == "":
+        return v
+    is_valid, error_msg = validate_profile_picture_url(v)
+    if not is_valid:
+        raise ValueError(error_msg)
+    return v
 
 class UserBase(BaseModel):
     email: EmailStr = Field(..., example="john.doe@example.com")
@@ -28,7 +56,10 @@ class UserBase(BaseModel):
     github_profile_url: Optional[str] = Field(None, example="https://github.com/johndoe")
     role: UserRole
 
-    _validate_urls = validator('profile_picture_url', 'linkedin_profile_url', 'github_profile_url', pre=True, allow_reuse=True)(validate_url)
+    # Validate each URL type with its specific validator
+    _validate_github_url = validator('github_profile_url', allow_reuse=True)(validate_github_url_schema)
+    _validate_linkedin_url = validator('linkedin_profile_url', allow_reuse=True)(validate_linkedin_url_schema)
+    _validate_profile_picture_url = validator('profile_picture_url', allow_reuse=True)(validate_profile_picture_url_schema)
  
     class Config:
         from_attributes = True
