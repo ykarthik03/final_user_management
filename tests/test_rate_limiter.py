@@ -2,6 +2,7 @@
 Tests for rate limiting functionality.
 """
 import pytest
+import time
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
