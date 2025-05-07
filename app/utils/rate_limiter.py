@@ -144,19 +144,25 @@ class RateLimiter:
         cleaned_attempts = {}
         for ts, count in self._attempts[key].items():
             # Handle both string timestamps and datetime objects
+            ts_datetime = None
+            
             if isinstance(ts, str):
                 try:
-                    ts_int = int(ts)
+                    # Try to convert string to timestamp
+                    ts_int = int(float(ts))  # Handle both integer and float strings
                     ts_datetime = datetime.fromtimestamp(ts_int)
-                    if ts_datetime >= cutoff:
-                        cleaned_attempts[ts] = count
                 except (ValueError, TypeError):
                     # If conversion fails, keep the attempt (better safe than sorry)
+                    logger.warning(f"Failed to convert timestamp {ts} to datetime")
                     cleaned_attempts[ts] = count
+                    continue  # Skip the datetime check
             else:
                 # It's already a datetime object
-                if ts >= cutoff:
-                    cleaned_attempts[ts] = count
+                ts_datetime = ts
+            
+            # Now check if the timestamp is within the window
+            if ts_datetime and ts_datetime >= cutoff:
+                cleaned_attempts[ts] = count
                     
         self._attempts[key] = cleaned_attempts
         
@@ -183,19 +189,24 @@ class RateLimiter:
         
         for ts, count in self._attempts[key].items():
             # Handle both string timestamps and datetime objects
+            ts_datetime = None
+            
             if isinstance(ts, str):
                 try:
-                    ts_int = int(ts)
+                    # Try to convert string to timestamp
+                    ts_int = int(float(ts))  # Handle both integer and float strings
                     ts_datetime = datetime.fromtimestamp(ts_int)
-                    if ts_datetime >= cutoff:
-                        total_count += count
                 except (ValueError, TypeError):
-                    # If conversion fails, count it (better safe than sorry)
-                    total_count += count
+                    # If conversion fails, use current time (better safe than sorry)
+                    logger.warning(f"Failed to convert timestamp {ts} to datetime")
+                    ts_datetime = now  # Count it as recent
             else:
                 # It's already a datetime object
-                if ts >= cutoff:
-                    total_count += count
+                ts_datetime = ts
+            
+            # Now check if the timestamp is within the window
+            if ts_datetime and ts_datetime >= cutoff:
+                total_count += count
                     
         return total_count
 
