@@ -28,7 +28,6 @@ from app.dependencies import get_current_user, get_db, get_email_service, requir
 from app.schemas.pagination_schema import EnhancedPagination
 from app.schemas.token_schema import TokenResponse
 from app.schemas.user_schemas import LoginRequest, UserBase, UserCreate, UserListResponse, UserResponse, UserUpdate
-from app.schemas import token_schema as schemas
 from app.services.user_service import UserService
 from app.services.jwt_service import create_access_token
 from app.utils.link_generation import create_user_links, generate_pagination_links
@@ -200,7 +199,7 @@ async def register(user_data: UserCreate, session: AsyncSession = Depends(get_db
         return user
     raise HTTPException(status_code=400, detail="Email already exists")
 
-@router.post("/login", response_model=schemas.Token)
+@router.post("/login", response_model=TokenResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db), request: Request = None):
     """Login endpoint for users."""
     # Get client IP address for rate limiting
