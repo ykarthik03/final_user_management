@@ -2,6 +2,7 @@
 Tests for rate limiting functionality.
 """
 import pytest
+import time
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
@@ -245,7 +246,9 @@ def test_rate_limiter_login_flow():
 
 
 def test_mixed_timestamp_formats():
-    """Test that the rate limiter correctly handles mixed timestamp formats."""
+    """Test that the rate limiter correctly handles mixed timestamp formats.
+    This test verifies handling of different timestamp formats including datetime objects and string timestamps.
+    """
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=3600)
     
     # Reset the attempts dictionary to start fresh
