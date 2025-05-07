@@ -7,15 +7,16 @@ from sqlalchemy import func, null, update, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import update, delete
+from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException, status
+from app.dependencies import get_settings
 import logging
 import secrets
 
 from app.models.user_model import User
-from app.utils.security import hash_password, verify_password, generate_verification_token, hash_token, verify_token
+from app.utils.security import hash_password, verify_password, generate_verification_token, hash_verification_token, verify_token
 from app.utils.nickname_gen import generate_nickname
 from app.utils.rate_limiter import login_rate_limiter
-from app.utils.security import generate_verification_token, hash_password, verify_password, verify_token
 from uuid import UUID
 from app.services.email_service import EmailService
 from app.models.user_model import UserRole
