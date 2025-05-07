@@ -39,3 +39,20 @@ class EmailService:
             "verification_url": verification_url,
             "email": user.email
         }, 'email_verification')
+        
+    async def send_email(self, to_email: str, subject: str, content: str):
+        """
+        Send a general email with custom content.
+        
+        Args:
+            to_email: Recipient email address
+            subject: Email subject
+            content: HTML content of the email
+        """
+        try:
+            self.smtp_client.send_email(subject, content, to_email)
+            return True
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error sending email: {str(e)}")
+            return False

@@ -1,18 +1,13 @@
 import pytest
 from fastapi import status
-from httpx import AsyncClient
 import uuid
 from unittest.mock import patch, MagicMock
 from app.models.user_model import User, UserRole
 from app.services.notification_service import NotificationService
+from app.utils.security import hash_password
+from app.services.user_service import UserService
 
 # Test data
-test_user_data = {
-    "email": "test_profile@example.com",
-    "password": "TestPassword123!",
-    "role": UserRole.AUTHENTICATED
-}
-
 test_profile_data = {
     "first_name": "John",
     "last_name": "Doe",
@@ -26,93 +21,44 @@ test_professional_status = {
     "is_professional": True
 }
 
-@pytest.fixture
-async def test_user(client, db_session):
-    """Create a test user for profile management tests."""
-    from app.services.user_service import UserService
-    from app.utils.security import hash_password
-    
-    # Create a user directly in the database
-    user = User(
-        email=test_user_data["email"],
-        hashed_password=hash_password(test_user_data["password"]),
-        nickname="test_profile_user",
-        role=UserRole.AUTHENTICATED,
-        email_verified=True
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    
-    return user
+# Use existing fixtures from conftest.py
+pytestmark = pytest.mark.asyncio
 
+# Create a mock for the notification service
 @pytest.fixture
-async def admin_user(client, db_session):
-    """Create an admin user for testing."""
-    from app.services.user_service import UserService
-    from app.utils.security import hash_password
-    
-    # Create an admin user directly in the database
-    user = User(
-        email="admin_profile@example.com",
-        hashed_password=hash_password(test_user_data["password"]),
-        nickname="admin_profile_user",
-        role=UserRole.ADMIN,
-        email_verified=True
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    
-    return user
+def mock_notification_service():
+    with patch.object(NotificationService, 'send_professional_status_notification', return_value=True) as mock:
+        yield mock
 
-@pytest.fixture
-async def user_token(client, test_user):
-    """Get a token for the test user."""
-    response = await client.post(
-        "/login",
-        data={"username": test_user_data["email"], "password": test_user_data["password"]}
-    )
-    return response.json()["access_token"]
-
-@pytest.fixture
-async def admin_token(client, admin_user):
-    """Get a token for the admin user."""
-    response = await client.post(
-        "/login",
-        data={"username": "admin_profile@example.com", "password": test_user_data["password"]}
-    )
-    return response.json()["access_token"]
-
-async def test_get_user_profile(client, test_user, user_token):
+async def test_get_user_profile(client, verified_user, auth_token):
     """Test getting a user's own profile."""
     response = await client.get(
-        f"/users/{test_user.id}/profile",
-        headers={"Authorization": f"Bearer {user_token}"}
+        f"/users/{verified_user.id}/profile",
+        headers={"Authorization": f"Bearer {auth_token}"}
     )
     
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    assert data["email"] == test_user_data["email"]
-    assert data["id"] == str(test_user.id)
+    assert data["email"] == verified_user.email
+    assert data["id"] == str(verified_user.id)
 
-async def test_update_user_profile(client, test_user, user_token):
+async def test_update_user_profile(client, verified_user, auth_token):
     """Test updating a user's own profile."""
     response = await client.put(
-        f"/users/{test_user.id}/profile",
+        f"/users/{verified_user.id}/profile",
         json=test_profile_data,
-        headers={"Authorization": f"Bearer {user_token}"}
+        headers={"Authorization": f"Bearer {auth_token}"}
     )
     
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["message"] == "Profile updated successfully"
-    assert data["user_id"] == str(test_user.id)
+    assert data["user_id"] == str(verified_user.id)
     
     # Verify profile was updated
     profile_response = await client.get(
-        f"/users/{test_user.id}/profile",
-        headers={"Authorization": f"Bearer {user_token}"}
+        f"/users/{verified_user.id}/profile",
+        headers={"Authorization": f"Bearer {auth_token}"}
     )
     profile_data = profile_response.json()
     
@@ -123,20 +69,20 @@ async def test_update_user_profile(client, test_user, user_token):
     assert profile_data["linkedin_profile_url"] == test_profile_data["linkedin_profile_url"]
     assert profile_data["github_profile_url"] == test_profile_data["github_profile_url"]
 
-async def test_update_other_user_profile_forbidden(client, test_user, admin_user, user_token):
+async def test_update_other_user_profile_forbidden(client, verified_user, admin_user, auth_token):
     """Test that a user cannot update another user's profile."""
     response = await client.put(
         f"/users/{admin_user.id}/profile",
         json=test_profile_data,
-        headers={"Authorization": f"Bearer {user_token}"}
+        headers={"Authorization": f"Bearer {auth_token}"}
     )
     
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
-async def test_admin_update_other_user_profile(client, test_user, admin_token):
+async def test_admin_update_other_user_profile(client, verified_user, admin_token):
     """Test that an admin can update another user's profile."""
     response = await client.put(
-        f"/users/{test_user.id}/profile",
+        f"/users/{verified_user.id}/profile",
         json=test_profile_data,
         headers={"Authorization": f"Bearer {admin_token}"}
     )
@@ -144,13 +90,12 @@ async def test_admin_update_other_user_profile(client, test_user, admin_token):
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["message"] == "Profile updated successfully"
-    assert data["user_id"] == str(test_user.id)
+    assert data["user_id"] == str(verified_user.id)
 
-@patch.object(NotificationService, 'send_professional_status_notification', return_value=True)
-async def test_update_professional_status(mock_notification, client, test_user, admin_token):
+async def test_update_professional_status(client, verified_user, admin_token, mock_notification_service):
     """Test updating a user's professional status as admin."""
     response = await client.put(
-        f"/users/{test_user.id}/professional-status",
+        f"/users/{verified_user.id}/professional-status",
         json=test_professional_status,
         headers={"Authorization": f"Bearer {admin_token}"}
     )
@@ -158,24 +103,24 @@ async def test_update_professional_status(mock_notification, client, test_user, 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["message"] == "Professional status updated successfully"
-    assert data["user_id"] == str(test_user.id)
+    assert data["user_id"] == str(verified_user.id)
     assert data["notification_sent"] == True
     
     # Verify professional status was updated
     profile_response = await client.get(
-        f"/users/{test_user.id}/profile",
+        f"/users/{verified_user.id}/profile",
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     profile_data = profile_response.json()
     
     assert profile_data["is_professional"] == test_professional_status["is_professional"]
 
-async def test_user_cannot_update_professional_status(client, test_user, user_token):
+async def test_user_cannot_update_professional_status(client, verified_user, auth_token):
     """Test that a regular user cannot update professional status."""
     response = await client.put(
-        f"/users/{test_user.id}/professional-status",
+        f"/users/{verified_user.id}/professional-status",
         json=test_professional_status,
-        headers={"Authorization": f"Bearer {user_token}"}
+        headers={"Authorization": f"Bearer {auth_token}"}
     )
     
     assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -201,16 +146,16 @@ async def test_update_nonexistent_profile(client, admin_token):
     
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
-@patch.object(NotificationService, 'send_professional_status_notification', return_value=False)
-async def test_professional_status_notification_failure(mock_notification, client, test_user, admin_token):
+async def test_professional_status_notification_failure(client, verified_user, admin_token):
     """Test handling of notification failure when updating professional status."""
-    response = await client.put(
-        f"/users/{test_user.id}/professional-status",
-        json=test_professional_status,
-        headers={"Authorization": f"Bearer {admin_token}"}
-    )
-    
-    assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    assert data["message"] == "Professional status updated successfully"
-    assert data["notification_sent"] == False
+    with patch.object(NotificationService, 'send_professional_status_notification', return_value=False):
+        response = await client.put(
+            f"/users/{verified_user.id}/professional-status",
+            json=test_professional_status,
+            headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["message"] == "Professional status updated successfully"
+        assert data["notification_sent"] == False
