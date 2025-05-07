@@ -15,7 +15,7 @@ Fixtures:
 
 # Standard library imports
 from builtins import Exception, range, str
-from datetime import timedelta
+from datetime import timedelta, datetime
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -110,12 +110,12 @@ async def locked_user(db_session):
         "nickname": fake.user_name(),
         "first_name": fake.first_name(),
         "last_name": fake.last_name(),
-        "email": unique_email,
+        "email": unique_email,  # Using unique_email to avoid conflicts
         "hashed_password": hash_password("MySuperPassword$1234"),
         "role": UserRole.AUTHENTICATED,
-        "email_verified": False,
-        "is_locked": True,
-        "failed_login_attempts": settings.max_login_attempts,
+        "is_locked": True,  # Account is locked
+        "email_verified": True,  # Email IS NOW verified
+        "failed_login_attempts": settings.max_login_attempts + 1 # Ensure it's actually locked
     }
     user = User(**user_data)
     db_session.add(user)

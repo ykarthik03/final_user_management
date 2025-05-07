@@ -38,8 +38,8 @@ class Database:
                         echo=echo, 
                         future=True,
                         pool_pre_ping=True,  # Check connection validity before using from pool
-                        pool_recycle=3600,   # Recycle connections after 1 hour
-                        connect_args={"connect_timeout": 10}  # Timeout after 10 seconds
+                        pool_recycle=3600    # Recycle connections after 1 hour
+                        # Removed connect_timeout as it's not supported by asyncpg
                     )
                     
                     cls._session_factory = sessionmaker(
@@ -94,7 +94,8 @@ class Database:
         try:
             # Create a connection and execute a simple query
             async with cls._engine.connect() as conn:
-                await conn.execute("SELECT 1")
+                from sqlalchemy import text
+                await conn.execute(text("SELECT 1"))
             logger.info("Database connection check successful")
             return True
         except SQLAlchemyError as e:

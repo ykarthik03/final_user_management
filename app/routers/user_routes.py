@@ -19,7 +19,7 @@ Key Highlights:
 """
 
 from builtins import dict, int, len, str
-from datetime import timedelta
+from datetime import timedelta, datetime
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -33,6 +33,7 @@ from app.services.jwt_service import create_access_token
 from app.utils.link_generation import create_user_links, generate_pagination_links
 from app.dependencies import get_settings
 from app.services.email_service import EmailService
+from app.utils.rate_limiter import login_rate_limiter
 import logging
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -201,25 +202,68 @@ async def register(user_data: UserCreate, session: AsyncSession = Depends(get_db
         return user
     raise HTTPException(status_code=400, detail="Email already exists")
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, tags=["Login and Registration"])
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db), request: Request = None):
     """Login endpoint for users."""
     try:
         # Get client IP address for rate limiting
         client_ip = request.client.host if request else None
         
-        user = await UserService.authenticate_user(db, form_data.username, form_data.password, client_ip)
+        # Create a rate limit key that combines IP and username
+        rate_limit_key = f"ip_{client_ip}:user_{form_data.username}" if client_ip else f"user_{form_data.username}"
         
-        # Generate JWT token
-        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
-        access_token = create_access_token(
-            data={"sub": str(user.id), "role": user.role.value},
-            expires_delta=access_token_expires
-        )
+        # Check if the IP or username is rate limited
+        is_limited, blocked_until = login_rate_limiter.is_rate_limited(rate_limit_key)
+        if is_limited:
+            # Format the time remaining in a user-friendly way
+            time_remaining = blocked_until - datetime.now() if blocked_until else timedelta(minutes=30)
+            minutes_remaining = max(1, int(time_remaining.total_seconds() / 60))
+            
+            logger.warning(f"Rate limit exceeded for {rate_limit_key}")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many login attempts. Please try again in {minutes_remaining} minutes."
+            )
         
-        return {"access_token": access_token, "token_type": "bearer"}
+        # Check if user exists first
+        user = await UserService.get_by_email(db, form_data.username)
+        if not user:
+            # Record failed login attempt for rate limiting
+            if client_ip:
+                login_rate_limiter.record_attempt(rate_limit_key)
+                logger.warning(f"Failed login attempt for non-existent user: {form_data.username}")
+            
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        # Attempt to authenticate the user
+        try:
+            user = await UserService.authenticate_user(db, form_data.username, form_data.password, client_ip)
+            
+            # If authentication succeeds, generate JWT token
+            access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+            access_token = create_access_token(
+                data={"sub": str(user.id), "role": user.role.value},
+                expires_delta=access_token_expires
+            )
+            
+            # Reset rate limiter on successful login
+            login_rate_limiter.reset(rate_limit_key)
+            
+            return {"access_token": access_token, "token_type": "bearer"}
+        except HTTPException as auth_ex:
+            # Record failed login attempt for rate limiting
+            if client_ip:
+                login_rate_limiter.record_attempt(rate_limit_key)
+                logger.warning(f"Failed login attempt recorded for {rate_limit_key}: {auth_ex.detail}")
+            
+            # Re-raise the HTTPException to preserve the status code and detail
+            raise auth_ex
     except HTTPException as e:
-        # Re-raise the HTTPException to preserve the status code and detail
+        # This handles any HTTPExceptions raised in the outer try block
         logger.warning(f"HTTP exception during login: {e.status_code} - {e.detail}")
         raise e
     except Exception as e:

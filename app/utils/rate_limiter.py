@@ -3,7 +3,7 @@ Rate limiting utilities for the User Management System.
 Implements a simple in-memory rate limiter to prevent brute force attacks.
 """
 from builtins import dict, int, str
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Tuple, Optional
 import logging
 import time
@@ -34,8 +34,8 @@ class RateLimiter:
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self.block_seconds = block_seconds
-        self._attempts: Dict[str, Dict[datetime, int]] = {}  # {key: {timestamp: count}}
-        self._blocked_until: Dict[str, datetime] = {}  # {key: blocked_until_timestamp}
+        self._attempts = {}  # {key: {timestamp: count}}
+        self._blocked_until = {}  # {key: blocked_until_timestamp}
         self._lock = Lock()  # Thread safety for in-memory storage
         
     def is_rate_limited(self, key: str) -> Tuple[bool, Optional[datetime]]:
@@ -52,31 +52,40 @@ class RateLimiter:
         """
         now = datetime.now()
         
-        # Check if key is blocked
-        if key in self._blocked_until:
-            if now < self._blocked_until[key]:
-                return True, self._blocked_until[key]
-            else:
-                # Block expired, remove it
-                del self._blocked_until[key]
-                # Also reset attempts for this key to avoid immediate re-blocking
-                if key in self._attempts:
-                    del self._attempts[key]
-        
-        # Clean up old attempts
-        self._cleanup(key, now)
-        
-        # Count recent attempts
-        recent_attempts = self._count_recent_attempts(key, now)
-        
-        # Check if over limit
-        if recent_attempts >= self.max_attempts:
-            # Block the key
-            blocked_until = now + timedelta(seconds=self.block_seconds)
-            self._blocked_until[key] = blocked_until
-            return True, blocked_until
-        
-        return False, None
+        # Use thread lock to ensure consistent state
+        with self._lock:
+            # Check if key is blocked
+            if key in self._blocked_until:
+                if now < self._blocked_until[key]:
+                    # Still blocked
+                    return True, self._blocked_until[key]
+                else:
+                    # Block expired, remove it and its associated attempts
+                    logger.debug(f"Block expired for key {key}. Clearing attempts.")
+                    del self._blocked_until[key]
+                    if key in self._attempts: 
+                        del self._attempts[key]
+            
+            # If key doesn't exist in attempts dictionary (e.g., new key or block just expired and attempts cleared),
+            # it's not rate limited by current ongoing attempts.
+            if key not in self._attempts:
+                return False, None
+            
+            # Clean up old attempts
+            self._cleanup(key, now)
+            
+            # Count recent attempts
+            recent_attempts = self._count_recent_attempts(key, now)
+            
+            # Check if at or over limit
+            if recent_attempts >= self.max_attempts:
+                # Block the key
+                blocked_until = now + timedelta(seconds=self.block_seconds)
+                logger.debug(f"Blocking key {key} until {blocked_until}")
+                self._blocked_until[key] = blocked_until
+                return True, blocked_until
+            
+            return False, None
     
     def record_attempt(self, key: str) -> bool:
         """
@@ -90,23 +99,26 @@ class RateLimiter:
         """
         now = datetime.now()
         with self._lock:
-            # Initialize attempts dictionary if not exists
+            # Ensure the key's primary dict exists if it's a completely new key
             if key not in self._attempts:
                 self._attempts[key] = {}
-                
-            # Remove old attempts outside the time window
-            self._attempts[key] = {
-                timestamp: count 
-                for timestamp, count in self._attempts[key].items()
-                if (now - timestamp).total_seconds() < self.window_seconds
-            }
+            
+            # Clean up old attempts. This might remove self._attempts[key] if all its sub-entries expire.
+            self._cleanup(key, now)
+            
+            # If _cleanup removed the key because all its old attempts expired,
+            # we need to re-initialize it for the new current attempt.
+            if key not in self._attempts:
+                self._attempts[key] = {}
             
             # Record new attempt
             current_minute = now.replace(second=0, microsecond=0)
             self._attempts[key][current_minute] = self._attempts[key].get(current_minute, 0) + 1
             
+            # Count recent attempts
+            total_attempts = self._count_recent_attempts(key, now)
+            
             # Check if we should block this key
-            total_attempts = sum(self._attempts[key].values())
             if total_attempts >= self.max_attempts:
                 self._blocked_until[key] = now + timedelta(seconds=self.block_seconds)
                 return True
@@ -136,14 +148,11 @@ class RateLimiter:
         if key not in self._attempts:
             return
         
-        # In tests, we're using timestamps as strings, but in our implementation we're using datetime objects
-        # Handle both cases for backward compatibility
         cutoff = now - timedelta(seconds=self.window_seconds)
         
         # Create a new dictionary with only recent attempts
         cleaned_attempts = {}
         for ts, count in self._attempts[key].items():
-            # Handle both string timestamps and datetime objects
             if isinstance(ts, str):
                 try:
                     ts_int = int(ts)
@@ -151,7 +160,7 @@ class RateLimiter:
                     if ts_datetime >= cutoff:
                         cleaned_attempts[ts] = count
                 except (ValueError, TypeError):
-                    # If conversion fails, keep the attempt (better safe than sorry)
+                    # If conversion fails, keep the attempt
                     cleaned_attempts[ts] = count
             else:
                 # It's already a datetime object
@@ -182,7 +191,6 @@ class RateLimiter:
         total_count = 0
         
         for ts, count in self._attempts[key].items():
-            # Handle both string timestamps and datetime objects
             if isinstance(ts, str):
                 try:
                     ts_int = int(ts)
@@ -190,7 +198,7 @@ class RateLimiter:
                     if ts_datetime >= cutoff:
                         total_count += count
                 except (ValueError, TypeError):
-                    # If conversion fails, count it (better safe than sorry)
+                    # If conversion fails, count it
                     total_count += count
             else:
                 # It's already a datetime object

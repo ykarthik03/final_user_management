@@ -32,6 +32,9 @@ def test_is_rate_limited_at_limit():
     """Test that is_rate_limited returns True when at the limit."""
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=3600)
     
+    # Ensure the key exists in the attempts dictionary
+    limiter._attempts["test_key"] = {}
+    
     # Make exactly the maximum number of attempts
     for _ in range(5):
         limiter.record_attempt("test_key")
@@ -77,10 +80,13 @@ def test_cleanup_removes_old_attempts():
     """Test that _cleanup removes old attempts."""
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=3600)
     
-    # Add some attempts
+    # Create a fixed reference time
     now = datetime.now()
     
     with patch('app.utils.rate_limiter.datetime') as mock_datetime:
+        # Configure mock to handle datetime constructor calls
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+        
         # Old attempt (outside window)
         mock_datetime.now.return_value = now - timedelta(seconds=400)
         limiter.record_attempt("test_key")
@@ -91,29 +97,41 @@ def test_cleanup_removes_old_attempts():
         
         mock_datetime.now.return_value = now
         limiter.record_attempt("test_key")
-    
-    # Clean up old attempts
-    limiter._cleanup("test_key", now)
-    
-    # Check that only recent attempts remain
-    assert limiter._count_recent_attempts("test_key", now) == 2  # Only the two recent ones
+        
+        # Clean up old attempts using the same 'now' time
+        limiter._cleanup("test_key", now)
+        
+        # Check that only recent attempts remain
+        assert limiter._count_recent_attempts("test_key", now) == 2  # Only the two recent ones
 
 
 def test_block_expiration():
     """Test that blocks expire after the configured time."""
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=10)  # Short block time
     
-    # Exceed the limit
-    for _ in range(6):
-        limiter.record_attempt("test_key")
+    # Create a fixed reference time
+    current_time = datetime.now()
     
-    # Verify blocked
-    is_limited, _ = limiter.is_rate_limited("test_key")
-    assert is_limited
-    
-    # Check after block expires
+    # Mock datetime.now() to return our controlled time
     with patch('app.utils.rate_limiter.datetime') as mock_datetime:
-        mock_datetime.now.return_value = datetime.now() + timedelta(seconds=11)  # After block time
+        # Set the current time for recording attempts
+        mock_datetime.now.return_value = current_time
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+        
+        # Exceed the limit
+        for _ in range(6):
+            limiter.record_attempt("test_key")
+        
+        # Verify blocked at current time
+        is_limited, blocked_until = limiter.is_rate_limited("test_key")
+        assert is_limited
+        assert blocked_until == current_time + timedelta(seconds=10)
+        
+        # Move time forward to after block expiration
+        future_time = current_time + timedelta(seconds=11)
+        mock_datetime.now.return_value = future_time
+        
+        # Check that the block has expired
         is_limited, _ = limiter.is_rate_limited("test_key")
         assert not is_limited
 
@@ -142,10 +160,13 @@ def test_count_recent_attempts():
     """Test that _count_recent_attempts correctly counts attempts within the window."""
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=3600)
     
-    # Add some attempts at different times
+    # Create a fixed reference time
     now = datetime.now()
     
     with patch('app.utils.rate_limiter.datetime') as mock_datetime:
+        # Configure mock to handle datetime constructor calls
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+        
         # Old attempt (outside window)
         mock_datetime.now.return_value = now - timedelta(seconds=400)
         limiter.record_attempt("test_key")
@@ -159,12 +180,12 @@ def test_count_recent_attempts():
         
         mock_datetime.now.return_value = now
         limiter.record_attempt("test_key")
-    
-    # Count recent attempts
-    count = limiter._count_recent_attempts("test_key", now)
-    
-    # Should only count the 3 recent attempts, not the old one
-    assert count == 3
+        
+        # Count recent attempts using the same 'now' time
+        count = limiter._count_recent_attempts("test_key", now)
+        
+        # Should only count the 3 recent attempts, not the old one
+        assert count == 3
 
 
 def test_rate_limiter_with_ip_and_username():
