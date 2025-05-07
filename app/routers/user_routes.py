@@ -28,6 +28,8 @@ from app.dependencies import get_current_user, get_db, get_email_service, requir
 from app.schemas.pagination_schema import EnhancedPagination
 from app.schemas.token_schema import TokenResponse
 from app.schemas.user_schemas import LoginRequest, UserBase, UserCreate, UserListResponse, UserResponse, UserUpdate
+from app.schemas.profile_schemas import ProfileUpdate, ProfessionalStatusUpdate, ProfileResponse, NotificationResponse
+from app.services.notification_service import NotificationService
 from app.services.user_service import UserService
 from app.services.jwt_service import create_access_token
 from app.utils.link_generation import create_user_links, generate_pagination_links
@@ -241,3 +243,130 @@ async def verify_email(user_id: UUID, token: str, db: AsyncSession = Depends(get
     if await UserService.verify_email_with_token(db, user_id, token):
         return {"message": "Email verified successfully"}
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token")
+
+
+@router.put("/users/{user_id}/profile", response_model=ProfileResponse, tags=["User Profile Management"])
+async def update_user_profile(
+    user_id: UUID, 
+    profile_data: ProfileUpdate, 
+    db: AsyncSession = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update a user's profile information.
+    
+    Users can only update their own profiles unless they have ADMIN or MANAGER role.
+    
+    - **user_id**: UUID of the user whose profile is being updated
+    - **profile_data**: ProfileUpdate model with the fields to update
+    """
+    # Check if user is updating their own profile or has admin/manager privileges
+    if str(user_id) != current_user.get("sub") and current_user.get("role") not in ["ADMIN", "MANAGER"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own profile unless you are an admin or manager"
+        )
+    
+    # Update the user profile
+    profile_dict = profile_data.model_dump(exclude_unset=True)
+    updated_user = await UserService.update_user_profile(db, user_id, profile_dict)
+    
+    if not updated_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    return ProfileResponse(
+        message="Profile updated successfully",
+        user_id=updated_user.id,
+        updated_fields=profile_dict
+    )
+
+
+@router.put("/users/{user_id}/professional-status", response_model=NotificationResponse, tags=["User Profile Management"])
+async def update_professional_status(
+    user_id: UUID, 
+    status_data: ProfessionalStatusUpdate, 
+    db: AsyncSession = Depends(get_db),
+    email_service: EmailService = Depends(get_email_service),
+    current_user: dict = Depends(require_role(["ADMIN", "MANAGER"]))
+):
+    """
+    Update a user's professional status.
+    
+    Only admins and managers can update professional status.
+    
+    - **user_id**: UUID of the user whose status is being updated
+    - **status_data**: ProfessionalStatusUpdate model with the new status
+    """
+    # Update the professional status
+    updated_user = await UserService.update_professional_status(
+        db, 
+        user_id, 
+        status_data.is_professional
+    )
+    
+    if not updated_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Send notification to the user
+    notification_sent = await NotificationService.send_professional_status_notification(
+        db,
+        user_id,
+        email_service,
+        status_data.is_professional
+    )
+    
+    return NotificationResponse(
+        message="Professional status updated successfully",
+        user_id=updated_user.id,
+        notification_sent=notification_sent
+    )
+
+
+@router.get("/users/{user_id}/profile", response_model=UserResponse, tags=["User Profile Management"])
+async def get_user_profile(
+    user_id: UUID, 
+    request: Request, 
+    db: AsyncSession = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get a user's profile information.
+    
+    Users can only view their own profiles unless they have ADMIN or MANAGER role.
+    
+    - **user_id**: UUID of the user whose profile is being viewed
+    """
+    # Check if user is viewing their own profile or has admin/manager privileges
+    if str(user_id) != current_user.get("sub") and current_user.get("role") not in ["ADMIN", "MANAGER"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own profile unless you are an admin or manager"
+        )
+    
+    user = await UserService.get_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return UserResponse.model_construct(
+        id=user.id,
+        nickname=user.nickname,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        bio=user.bio,
+        profile_picture_url=user.profile_picture_url,
+        github_profile_url=user.github_profile_url,
+        linkedin_profile_url=user.linkedin_profile_url,
+        role=user.role,
+        email=user.email,
+        is_professional=user.is_professional,
+        last_login_at=user.last_login_at,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        links=create_user_links(user.id, request)
+    )

@@ -15,6 +15,7 @@ import secrets
 
 from app.models.user_model import User
 from app.schemas.user_schemas import UserCreate, UserUpdate
+from app.schemas.profile_schemas import ProfileUpdate, ProfessionalStatusUpdate
 from app.utils.security import hash_password, verify_password, generate_verification_token, hash_verification_token, verify_token
 from app.utils.nickname_gen import generate_nickname
 from app.utils.rate_limiter import login_rate_limiter
@@ -269,3 +270,73 @@ class UserService:
             await session.commit()
             return True
         return False
+
+    @classmethod
+    async def update_user_profile(cls, session: AsyncSession, user_id: UUID, profile_data: dict) -> Optional[User]:
+        """
+        Update a user's profile fields.
+        
+        Args:
+            session: Database session
+            user_id: ID of the user to update
+            profile_data: Dictionary containing profile fields to update
+            
+        Returns:
+            Updated user object or None if user not found
+        """
+        try:
+            user = await cls.get_by_id(session, user_id)
+            if not user:
+                logger.error(f"User {user_id} not found for profile update")
+                return None
+                
+            # Update only the provided fields
+            for field, value in profile_data.items():
+                if hasattr(user, field):
+                    setattr(user, field, value)
+            
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            
+            logger.info(f"Profile updated for user {user_id}")
+            return user
+            
+        except Exception as e:
+            logger.error(f"Error updating user profile: {str(e)}")
+            await session.rollback()
+            return None
+    
+    @classmethod
+    async def update_professional_status(cls, session: AsyncSession, user_id: UUID, is_professional: bool) -> Optional[User]:
+        """
+        Update a user's professional status.
+        
+        Args:
+            session: Database session
+            user_id: ID of the user to update
+            is_professional: New professional status
+            
+        Returns:
+            Updated user object or None if user not found
+        """
+        try:
+            user = await cls.get_by_id(session, user_id)
+            if not user:
+                logger.error(f"User {user_id} not found for professional status update")
+                return None
+                
+            user.is_professional = is_professional
+            user.professional_status_updated_at = datetime.now(timezone.utc)
+            
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            
+            logger.info(f"Professional status updated for user {user_id} to {is_professional}")
+            return user
+            
+        except Exception as e:
+            logger.error(f"Error updating professional status: {str(e)}")
+            await session.rollback()
+            return None
