@@ -14,6 +14,7 @@ import logging
 import secrets
 
 from app.models.user_model import User
+from app.schemas.user_schemas import UserCreate, UserUpdate
 from app.utils.security import hash_password, verify_password, generate_verification_token, hash_verification_token, verify_token
 from app.utils.nickname_gen import generate_nickname
 from app.utils.rate_limiter import login_rate_limiter
@@ -137,27 +138,34 @@ class UserService:
     @classmethod
     async def authenticate_user(cls, db: AsyncSession, username: str, password: str, ip_address: str = None) -> User:
         """Authenticate a user by username and password."""
-        # Create a rate limiting key that combines IP and username
-        # This prevents both username enumeration and IP-based brute force
         rate_limit_key = f"ip_{ip_address}:user_{username}" if ip_address else f"user_{username}"
         
-        # Check if this IP+username combination is rate limited
+        # First check if already rate limited
         is_limited, blocked_until = login_rate_limiter.is_rate_limited(rate_limit_key)
         if is_limited:
-            logger.warning(f"Rate limit exceeded for {rate_limit_key}")
+            print(f"Rate limit exceeded for {rate_limit_key}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"Too many login attempts. Try again after {blocked_until}",
                 headers={"Retry-After": str(int((blocked_until - datetime.now()).total_seconds()))},
             )
         
-        # Record this attempt
-        login_rate_limiter.record_attempt(rate_limit_key)
+        # Record this attempt and check if we've now exceeded the limit
+        is_now_limited = login_rate_limiter.record_attempt(rate_limit_key)
+        if is_now_limited:
+            # This attempt pushed us over the limit
+            _, blocked_until = login_rate_limiter.is_rate_limited(rate_limit_key)
+            print(f"Rate limit now exceeded for {rate_limit_key}")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many login attempts. Try again after {blocked_until}",
+                headers={"Retry-After": str(int((blocked_until - datetime.now()).total_seconds()))},
+            )
         
         user = await cls.get_by_email(db, username)
         
         if not user:
-            logger.warning(f"Authentication failed: User {username} not found")
+            print(f"Authentication failed: User {username} not found")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username or password",
@@ -165,16 +173,14 @@ class UserService:
             )
         
         if not verify_password(password, user.hashed_password):
-            logger.warning(f"Authentication failed: Invalid password for user {username}")
-            # Update failed login attempts
+            print(f"Authentication failed: Invalid password for user {username}")
             user.failed_login_attempts += 1
-            user.last_failed_login = datetime.now()
+            user.last_failed_login = datetime.now(timezone.utc)
             
-            # Lock account if too many failed attempts
-            if user.failed_login_attempts >= 5:  # Configurable threshold
+            if user.failed_login_attempts >= get_settings().max_login_attempts:  
                 user.is_locked = True
-                user.locked_until = datetime.now() + timedelta(minutes=30)  # Configurable lockout period
-                logger.warning(f"User {username} locked due to too many failed login attempts")
+                user.locked_until = datetime.now(timezone.utc) + get_settings().lockout_duration  
+                print(f"User {username} locked due to too many failed login attempts")
             
             await db.commit()
             
@@ -184,33 +190,29 @@ class UserService:
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Check if account is locked
         if user.is_locked:
-            if user.locked_until and user.locked_until > datetime.now():
-                logger.warning(f"Login attempt for locked account: {username}")
+            if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+                print(f"Login attempt for locked account: {username}")
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Account is locked until {user.locked_until}",
+                    status_code=status.HTTP_401_UNAUTHORIZED, 
+                    detail=f"Account is locked until {user.locked_until}. Contact support if this is an error.",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             else:
-                # Unlock account if lock period has expired
                 user.is_locked = False
                 user.locked_until = None
         
-        # Reset failed login attempts on successful login
         user.failed_login_attempts = 0
-        user.last_login = datetime.now()
+        user.last_login = datetime.now(timezone.utc)
         await db.commit()
         
-        # Reset rate limiter for this user on successful login
         login_rate_limiter.reset(rate_limit_key)
         
         return user
 
     @classmethod
-    async def login_user(cls, session: AsyncSession, email: str, password: str) -> Optional[User]:
-        user = await cls.authenticate_user(session, email, password)
+    async def login_user(cls, session: AsyncSession, email: str, password: str, ip_address: Optional[str] = None) -> Optional[User]: 
+        user = await cls.authenticate_user(session, email, password, ip_address=ip_address) 
         return user
 
     @classmethod
@@ -225,8 +227,8 @@ class UserService:
         user = await cls.get_by_id(session, user_id)
         if user:
             user.hashed_password = hashed_password
-            user.failed_login_attempts = 0  # Resetting failed login attempts
-            user.is_locked = False  # Unlocking the user account, if locked
+            user.failed_login_attempts = 0  
+            user.is_locked = False  
             session.add(user)
             await session.commit()
             return True
@@ -237,7 +239,7 @@ class UserService:
         user = await cls.get_by_id(session, user_id)
         if user and user.verification_token and verify_token(token, user.verification_token):
             user.email_verified = True
-            user.verification_token = None  # Clear the token once used
+            user.verification_token = None  
             user.role = UserRole.AUTHENTICATED
             session.add(user)
             await session.commit()
@@ -262,7 +264,7 @@ class UserService:
         user = await cls.get_by_id(session, user_id)
         if user and user.is_locked:
             user.is_locked = False
-            user.failed_login_attempts = 0  # Optionally reset failed login attempts
+            user.failed_login_attempts = 0  
             session.add(user)
             await session.commit()
             return True

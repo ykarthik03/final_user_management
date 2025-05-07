@@ -39,13 +39,13 @@ def generate_nickname(min_length: int = 0, max_length: int = 50,
     else:
         animals = ANIMALS
     
-    # Handle extreme length constraints
+    # For all max_length constraints, find appropriate combinations
+    # Sort adjectives and animals by length
+    sorted_adjectives = sorted(adjectives, key=len)
+    sorted_animals = sorted(animals, key=len)
+    
     if max_length <= 8:
-        # For very short max lengths, find the shortest possible combination
-        # Sort adjectives and animals by length
-        sorted_adjectives = sorted(adjectives, key=len)
-        sorted_animals = sorted(animals, key=len)
-        
+        # For very short max lengths, use shortest possible words
         # Try combinations until we find one that fits
         for adj in sorted_adjectives:
             for anim in sorted_animals:
@@ -64,8 +64,20 @@ def generate_nickname(min_length: int = 0, max_length: int = 50,
             # If no combination fits, use the shortest possible
             adjective = sorted_adjectives[0][:1]  # Take just first letter if needed
             animal = sorted_animals[0][:1]  # Take just first letter if needed
+    elif max_length <= 15:
+        # For medium length constraints, use short words
+        short_adjectives = [adj for adj in sorted_adjectives if len(adj) <= 5]
+        short_animals = [anim for anim in sorted_animals if len(anim) <= 5]
+        
+        if not short_adjectives:
+            short_adjectives = [sorted_adjectives[0]]
+        if not short_animals:
+            short_animals = [sorted_animals[0]]
+            
+        adjective = random.choice(short_adjectives)
+        animal = random.choice(short_animals)
     else:
-        # Normal case
+        # Normal case for longer max lengths
         adjective = random.choice(adjectives)
         animal = random.choice(animals)
     

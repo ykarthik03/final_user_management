@@ -80,7 +80,7 @@ def test_cleanup_removes_old_attempts():
     # Add some attempts
     now = datetime.now()
     
-    with patch('datetime.datetime') as mock_datetime:
+    with patch('app.utils.rate_limiter.datetime') as mock_datetime:
         # Old attempt (outside window)
         mock_datetime.now.return_value = now - timedelta(seconds=400)
         limiter.record_attempt("test_key")
@@ -108,11 +108,11 @@ def test_block_expiration():
         limiter.record_attempt("test_key")
     
     # Verify blocked
-    is_limited, blocked_until = limiter.is_rate_limited("test_key")
+    is_limited, _ = limiter.is_rate_limited("test_key")
     assert is_limited
     
     # Check after block expires
-    with patch('datetime.datetime') as mock_datetime:
+    with patch('app.utils.rate_limiter.datetime') as mock_datetime:
         mock_datetime.now.return_value = datetime.now() + timedelta(seconds=11)  # After block time
         is_limited, _ = limiter.is_rate_limited("test_key")
         assert not is_limited
@@ -145,7 +145,7 @@ def test_count_recent_attempts():
     # Add some attempts at different times
     now = datetime.now()
     
-    with patch('datetime.datetime') as mock_datetime:
+    with patch('app.utils.rate_limiter.datetime') as mock_datetime:
         # Old attempt (outside window)
         mock_datetime.now.return_value = now - timedelta(seconds=400)
         limiter.record_attempt("test_key")

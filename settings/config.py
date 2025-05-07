@@ -1,10 +1,12 @@
 from builtins import bool, int, str
 from pathlib import Path
+from datetime import timedelta
 from pydantic import  Field, AnyUrl, DirectoryPath
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    max_login_attempts: int = Field(default=3, description="Background color of QR codes")
+    max_login_attempts: int = Field(default=5, description="Maximum failed login attempts before lockout")
+    lockout_duration: timedelta = Field(default=timedelta(minutes=30), description="Duration for account lockout")
     # Server configuration
     server_base_url: AnyUrl = Field(default='http://localhost', description="Base URL of the server")
     server_download_folder: str = Field(default='downloads', description="Folder for storing downloaded files")

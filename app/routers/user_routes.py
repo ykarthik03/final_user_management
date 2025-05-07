@@ -33,6 +33,8 @@ from app.services.jwt_service import create_access_token
 from app.utils.link_generation import create_user_links, generate_pagination_links
 from app.dependencies import get_settings
 from app.services.email_service import EmailService
+import logging
+logger = logging.getLogger(__name__)
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 settings = get_settings()
@@ -202,19 +204,31 @@ async def register(user_data: UserCreate, session: AsyncSession = Depends(get_db
 @router.post("/login", response_model=TokenResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db), request: Request = None):
     """Login endpoint for users."""
-    # Get client IP address for rate limiting
-    client_ip = request.client.host if request else None
-    
-    user = await UserService.authenticate_user(db, form_data.username, form_data.password, client_ip)
-    
-    # Generate JWT token
-    access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
-    access_token = create_access_token(
-        data={"sub": str(user.id), "role": user.role.value},
-        expires_delta=access_token_expires
-    )
-    
-    return {"access_token": access_token, "token_type": "bearer"}
+    try:
+        # Get client IP address for rate limiting
+        client_ip = request.client.host if request else None
+        
+        user = await UserService.authenticate_user(db, form_data.username, form_data.password, client_ip)
+        
+        # Generate JWT token
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "role": user.role.value},
+            expires_delta=access_token_expires
+        )
+        
+        return {"access_token": access_token, "token_type": "bearer"}
+    except HTTPException as e:
+        # Re-raise the HTTPException to preserve the status code and detail
+        logger.warning(f"HTTP exception during login: {e.status_code} - {e.detail}")
+        raise e
+    except Exception as e:
+        # Log unexpected errors and return 500
+        logger.error(f"Unexpected error during login: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error during login"
+        )
 
 @router.get("/verify-email/{user_id}/{token}", status_code=status.HTTP_200_OK, name="verify_email", tags=["Login and Registration"])
 async def verify_email(user_id: UUID, token: str, db: AsyncSession = Depends(get_db), email_service: EmailService = Depends(get_email_service)):

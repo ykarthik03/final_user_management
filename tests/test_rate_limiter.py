@@ -77,45 +77,60 @@ def test_cleanup_removes_old_attempts():
     """Test that _cleanup removes old attempts."""
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=3600)
     
-    # Add some attempts
-    now = datetime.now()
-    old_time = int((now - timedelta(seconds=400)).timestamp())  # Older than window
-    recent_time = int((now - timedelta(seconds=200)).timestamp())  # Within window
+    # Reset the attempts dictionary to start fresh
+    limiter._attempts = {}
     
-    with patch('datetime.datetime') as mock_datetime:
-        mock_datetime.now.return_value = now - timedelta(seconds=400)
-        limiter.record_attempt("test_key")
-        
-        mock_datetime.now.return_value = now - timedelta(seconds=200)
-        limiter.record_attempt("test_key")
-        
-        mock_datetime.now.return_value = now
-        limiter.record_attempt("test_key")
+    # Add some attempts with specific timestamps
+    now = datetime.now()
+    
+    # Manually add attempts to the dictionary with timestamps
+    limiter._attempts["test_key"] = {}
+    
+    # Add an old attempt (outside the window)
+    old_time = now - timedelta(seconds=400)  # Older than window
+    limiter._attempts["test_key"][old_time] = 1
+    
+    # Add two recent attempts (within window)
+    recent_time1 = now - timedelta(seconds=200)  # Within window
+    recent_time2 = now - timedelta(seconds=100)  # Within window
+    limiter._attempts["test_key"][recent_time1] = 1
+    limiter._attempts["test_key"][recent_time2] = 1
     
     # Clean up old attempts
     limiter._cleanup("test_key", now)
     
     # Check that only recent attempts remain
-    assert limiter._count_recent_attempts("test_key", now) == 2  # Only the two recent ones
+    assert len(limiter._attempts["test_key"]) == 2  # Only the two recent ones should remain
 
 
 def test_block_expiration():
     """Test that blocks expire after the configured time."""
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=10)  # Short block time
     
-    # Exceed the limit
-    for _ in range(6):
-        limiter.record_attempt("test_key")
+    # Reset the limiter's state
+    limiter._attempts = {}
+    limiter._blocked_until = {}
     
-    # Verify blocked
-    is_limited, blocked_until = limiter.is_rate_limited("test_key")
-    assert is_limited
+    # Set up a blocked key that's about to expire
+    now = datetime.now()
     
-    # Check after block expires
-    with patch('datetime.datetime') as mock_datetime:
-        mock_datetime.now.return_value = datetime.now() + timedelta(seconds=11)  # After block time
+    # Manually set up the blocked state
+    limiter._attempts["test_key"] = {now: 6}  # More than max_attempts
+    
+    # First test that it's blocked
+    limiter._blocked_until["test_key"] = now + timedelta(seconds=5)  # Blocked for 5 more seconds
+    is_limited, _ = limiter.is_rate_limited("test_key")
+    assert is_limited, "Key should be rate limited when block is active"
+    
+    # Now test with expired block
+    # Create a future time after the block expires
+    future_time = now + timedelta(seconds=15)  # 15 seconds later, after the 10-second block
+    
+    # Test with mocked time
+    with patch('app.utils.rate_limiter.datetime') as mock_datetime:
+        mock_datetime.now.return_value = future_time
         is_limited, _ = limiter.is_rate_limited("test_key")
-        assert not is_limited
+        assert not is_limited, "Key should not be rate limited after block expires"
 
 
 def test_different_keys_separate_limits():
@@ -142,23 +157,26 @@ def test_count_recent_attempts():
     """Test that _count_recent_attempts correctly counts attempts within the window."""
     limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=3600)
     
-    # Add some attempts at different times
+    # Reset the attempts dictionary to start fresh
+    limiter._attempts = {}
+    
+    # Add some attempts with specific timestamps
     now = datetime.now()
     
-    with patch('datetime.datetime') as mock_datetime:
-        # Old attempt (outside window)
-        mock_datetime.now.return_value = now - timedelta(seconds=400)
-        limiter.record_attempt("test_key")
-        
-        # Recent attempts (within window)
-        mock_datetime.now.return_value = now - timedelta(seconds=200)
-        limiter.record_attempt("test_key")
-        
-        mock_datetime.now.return_value = now - timedelta(seconds=100)
-        limiter.record_attempt("test_key")
-        
-        mock_datetime.now.return_value = now
-        limiter.record_attempt("test_key")
+    # Manually add attempts to the dictionary with timestamps
+    limiter._attempts["test_key"] = {}
+    
+    # Add an old attempt (outside the window)
+    old_time = now - timedelta(seconds=400)  # Older than window
+    limiter._attempts["test_key"][old_time] = 1
+    
+    # Add three recent attempts (within window)
+    recent_time1 = now - timedelta(seconds=200)  # Within window
+    recent_time2 = now - timedelta(seconds=100)  # Within window
+    recent_time3 = now - timedelta(seconds=50)   # Within window
+    limiter._attempts["test_key"][recent_time1] = 1
+    limiter._attempts["test_key"][recent_time2] = 1
+    limiter._attempts["test_key"][recent_time3] = 1
     
     # Count recent attempts
     count = limiter._count_recent_attempts("test_key", now)
