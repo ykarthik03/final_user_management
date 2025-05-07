@@ -50,4 +50,46 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         raise ValueError("Authentication process encountered an unexpected error") from e
 
 def generate_verification_token():
-    return secrets.token_urlsafe(16)  # Generates a secure 16-byte URL-safe token
+    """Generate a secure URL-safe token for email verification.
+    
+    Returns:
+        tuple: A tuple containing (raw_token, hashed_token) where raw_token is sent to the user
+        and hashed_token is stored in the database.
+    """
+    raw_token = secrets.token_urlsafe(32)  # Increased from 16 to 32 bytes for better security
+    hashed_token = hash_verification_token(raw_token)
+    return raw_token, hashed_token
+
+def hash_verification_token(token: str, rounds: int = 10) -> str:
+    """Hash a verification token using bcrypt.
+    
+    Args:
+        token (str): The raw verification token to hash.
+        rounds (int): The cost factor for bcrypt hashing.
+        
+    Returns:
+        str: The hashed verification token.
+    """
+    try:
+        salt = bcrypt.gensalt(rounds=rounds)
+        hashed_token = bcrypt.hashpw(token.encode('utf-8'), salt)
+        return hashed_token.decode('utf-8')
+    except Exception as e:
+        logger.error(f"Failed to hash verification token: {e}")
+        raise ValueError("Failed to hash verification token") from e
+
+def verify_token(raw_token: str, hashed_token: str) -> bool:
+    """Verify a raw verification token against its hashed version.
+    
+    Args:
+        raw_token (str): The raw token provided by the user.
+        hashed_token (str): The hashed token stored in the database.
+        
+    Returns:
+        bool: True if the token is valid, False otherwise.
+    """
+    try:
+        return bcrypt.checkpw(raw_token.encode('utf-8'), hashed_token.encode('utf-8'))
+    except Exception as e:
+        logger.error(f"Error verifying token: {e}")
+        return False

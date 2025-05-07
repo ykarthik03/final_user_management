@@ -52,6 +52,10 @@ class User(Base):
     """
     __tablename__ = "users"
     __mapper_args__ = {"eager_defaults": True}
+    
+    # Transient attribute for holding the raw verification token temporarily
+    # This will not be stored in the database
+    raw_verification_token = None
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nickname: Mapped[str] = Column(String(50), unique=True, nullable=False, index=True)

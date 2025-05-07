@@ -29,9 +29,13 @@ class EmailService:
         self.smtp_client.send_email(subject_map[email_type], html_content, user_data['email'])
 
     async def send_verification_email(self, user: User):
-        verification_url = f"{settings.server_base_url}verify-email/{user.id}/{user.verification_token}"
+        # Use the raw_verification_token for the URL, not the hashed one stored in the database
+        if not hasattr(user, 'raw_verification_token') or user.raw_verification_token is None:
+            raise ValueError("Raw verification token is missing. Cannot send verification email.")
+            
+        verification_url = f"{settings.server_base_url}verify-email/{user.id}/{user.raw_verification_token}"
         await self.send_user_email({
-            "name": user.first_name,
+            "name": user.first_name or user.nickname,
             "verification_url": verification_url,
             "email": user.email
         }, 'email_verification')

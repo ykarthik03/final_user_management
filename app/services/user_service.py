@@ -1,16 +1,21 @@
 from builtins import Exception, bool, classmethod, int, str
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import secrets
 from typing import Optional, Dict, List
 from pydantic import ValidationError
 from sqlalchemy import func, null, update, select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.dependencies import get_email_service, get_settings
+from sqlalchemy.future import select
+from sqlalchemy import update, delete
+from fastapi import HTTPException, status
+import logging
+import secrets
+
 from app.models.user_model import User
-from app.schemas.user_schemas import UserCreate, UserUpdate
+from app.utils.security import hash_password, verify_password, generate_verification_token, hash_token, verify_token
 from app.utils.nickname_gen import generate_nickname
-from app.utils.security import generate_verification_token, hash_password, verify_password
+from app.utils.rate_limiter import login_rate_limiter
+from app.utils.security import generate_verification_token, hash_password, verify_password, verify_token
 from uuid import UUID
 from app.services.email_service import EmailService
 from app.models.user_model import UserRole
@@ -70,8 +75,13 @@ class UserService:
                 new_user.email_verified = True
 
             else:
-                new_user.verification_token = generate_verification_token()
+                raw_token, hashed_token = generate_verification_token()
+                new_user.verification_token = hashed_token
+                # Store the raw token temporarily for email sending
+                new_user.raw_verification_token = raw_token
                 await email_service.send_verification_email(new_user)
+                # Remove the raw token after sending email to prevent exposure
+                new_user.raw_verification_token = None
 
             session.add(new_user)
             await session.commit()
@@ -124,26 +134,83 @@ class UserService:
     
 
     @classmethod
-    async def login_user(cls, session: AsyncSession, email: str, password: str) -> Optional[User]:
-        user = await cls.get_by_email(session, email)
-        if user:
-            if user.email_verified is False:
-                return None
-            if user.is_locked:
-                return None
-            if verify_password(password, user.hashed_password):
-                user.failed_login_attempts = 0
-                user.last_login_at = datetime.now(timezone.utc)
-                session.add(user)
-                await session.commit()
-                return user
+    async def authenticate_user(cls, db: AsyncSession, username: str, password: str, ip_address: str = None) -> User:
+        """Authenticate a user by username and password."""
+        # Create a rate limiting key that combines IP and username
+        # This prevents both username enumeration and IP-based brute force
+        rate_limit_key = f"ip_{ip_address}:user_{username}" if ip_address else f"user_{username}"
+        
+        # Check if this IP+username combination is rate limited
+        is_limited, blocked_until = login_rate_limiter.is_rate_limited(rate_limit_key)
+        if is_limited:
+            logger.warning(f"Rate limit exceeded for {rate_limit_key}")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many login attempts. Try again after {blocked_until}",
+                headers={"Retry-After": str(int((blocked_until - datetime.now()).total_seconds()))},
+            )
+        
+        # Record this attempt
+        login_rate_limiter.record_attempt(rate_limit_key)
+        
+        user = await cls.get_by_email(db, username)
+        
+        if not user:
+            logger.warning(f"Authentication failed: User {username} not found")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        if not verify_password(password, user.hashed_password):
+            logger.warning(f"Authentication failed: Invalid password for user {username}")
+            # Update failed login attempts
+            user.failed_login_attempts += 1
+            user.last_failed_login = datetime.now()
+            
+            # Lock account if too many failed attempts
+            if user.failed_login_attempts >= 5:  # Configurable threshold
+                user.is_locked = True
+                user.locked_until = datetime.now() + timedelta(minutes=30)  # Configurable lockout period
+                logger.warning(f"User {username} locked due to too many failed login attempts")
+            
+            await db.commit()
+            
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Check if account is locked
+        if user.is_locked:
+            if user.locked_until and user.locked_until > datetime.now():
+                logger.warning(f"Login attempt for locked account: {username}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Account is locked until {user.locked_until}",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             else:
-                user.failed_login_attempts += 1
-                if user.failed_login_attempts >= settings.max_login_attempts:
-                    user.is_locked = True
-                session.add(user)
-                await session.commit()
-        return None
+                # Unlock account if lock period has expired
+                user.is_locked = False
+                user.locked_until = None
+        
+        # Reset failed login attempts on successful login
+        user.failed_login_attempts = 0
+        user.last_login = datetime.now()
+        await db.commit()
+        
+        # Reset rate limiter for this user on successful login
+        login_rate_limiter.reset(rate_limit_key)
+        
+        return user
+
+    @classmethod
+    async def login_user(cls, session: AsyncSession, email: str, password: str) -> Optional[User]:
+        user = await cls.authenticate_user(session, email, password)
+        return user
 
     @classmethod
     async def is_account_locked(cls, session: AsyncSession, email: str) -> bool:
@@ -167,7 +234,7 @@ class UserService:
     @classmethod
     async def verify_email_with_token(cls, session: AsyncSession, user_id: UUID, token: str) -> bool:
         user = await cls.get_by_id(session, user_id)
-        if user and user.verification_token == token:
+        if user and user.verification_token and verify_token(token, user.verification_token):
             user.email_verified = True
             user.verification_token = None  # Clear the token once used
             user.role = UserRole.AUTHENTICATED
