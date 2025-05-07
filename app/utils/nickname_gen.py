@@ -3,71 +3,101 @@ import random
 import re
 from typing import List, Optional
 
-# Expanded lists for more diverse nickname generation
-ADJECTIVES = [
-    "clever", "jolly", "brave", "sly", "gentle", "swift", "calm", "wise", 
-    "happy", "mighty", "noble", "proud", "fierce", "kind", "quick", "bright", 
-    "bold", "eager", "fair", "grand", "keen", "lively", "merry", "nice", 
-    "polite", "quiet", "rapid", "smart", "strong", "tall", "witty", "zealous"
-]
+# Lists of adjectives and animals for nickname generation
+ADJECTIVES = ['happy', 'clever', 'brave', 'mighty', 'smart', 'tall', 'short', 'swift', 'calm', 'wild', 'gentle', 'bold', 'quiet', 'loud', 'wise', 'funny', 'kind', 'proud', 'silly', 'fancy']
+ANIMALS = ['lion', 'tiger', 'bear', 'wolf', 'fox', 'eagle', 'hawk', 'dolphin', 'whale', 'shark', 'koala', 'panda', 'zebra', 'giraffe', 'elephant', 'monkey', 'owl', 'penguin', 'turtle', 'rabbit']
 
-ANIMALS = [
-    "panda", "fox", "raccoon", "koala", "lion", "tiger", "eagle", "wolf", 
-    "bear", "hawk", "dolphin", "shark", "whale", "zebra", "elephant", "giraffe", 
-    "monkey", "gorilla", "penguin", "turtle", "rabbit", "squirrel", "deer", 
-    "moose", "owl", "falcon", "swan", "duck", "goose", "horse", "unicorn"
-]
-
-def generate_nickname(min_length: int = 5, max_length: int = 30, 
+def generate_nickname(min_length: int = 0, max_length: int = 50, 
                      custom_adjectives: Optional[List[str]] = None, 
                      custom_animals: Optional[List[str]] = None) -> str:
-    """Generate a URL-safe nickname using adjectives and animal names.
+    """Generate a URL-safe nickname in the format adjective_animal_number
     
     Args:
-        min_length: Minimum length of the generated nickname
-        max_length: Maximum length of the generated nickname
+        min_length: Minimum length of the nickname (default: 0, no minimum)
+        max_length: Maximum length of the nickname (default: 50)
         custom_adjectives: Optional list of custom adjectives to use
         custom_animals: Optional list of custom animals to use
         
     Returns:
         A URL-safe nickname string in the format adjective_animal_number
+        
+    Raises:
+        ValueError: If custom_adjectives or custom_animals is empty
     """
     # Use custom lists if provided, otherwise use defaults
-    adjectives = custom_adjectives if custom_adjectives else ADJECTIVES
-    animals = custom_animals if custom_animals else ANIMALS
-    
-    # Ensure we have at least one adjective and animal
-    if not adjectives or not animals:
-        raise ValueError("Adjectives and animals lists cannot be empty")
-    
-    # Try to generate a nickname within the length constraints
-    attempts = 0
-    max_attempts = 10  # Prevent infinite loops
-    
-    while attempts < max_attempts:
-        # Generate a random number with variable digits
-        number = random.randint(1, 9999)
+    if custom_adjectives is not None:
+        if not custom_adjectives:
+            raise ValueError("Custom adjectives list cannot be empty")
+        adjectives = custom_adjectives
+    else:
+        adjectives = ADJECTIVES
         
-        # Create the nickname
-        nickname = f"{random.choice(adjectives)}_{random.choice(animals)}_{number}"
+    if custom_animals is not None:
+        if not custom_animals:
+            raise ValueError("Custom animals list cannot be empty")
+        animals = custom_animals
+    else:
+        animals = ANIMALS
+    
+    # Handle extreme length constraints
+    if max_length <= 8:
+        # For very short max lengths, find the shortest possible combination
+        # Sort adjectives and animals by length
+        sorted_adjectives = sorted(adjectives, key=len)
+        sorted_animals = sorted(animals, key=len)
         
-        # Check if it meets the length requirements
-        if min_length <= len(nickname) <= max_length:
-            return nickname
-            
-        attempts += 1
+        # Try combinations until we find one that fits
+        for adj in sorted_adjectives:
+            for anim in sorted_animals:
+                # Check if this combination will fit within max_length
+                # Format: adj_anim_1 (need at least one digit)
+                if len(adj) + len(anim) + 3 <= max_length:  # +3 for underscores and digit
+                    adjective = adj
+                    animal = anim
+                    break
+            else:
+                # Continue outer loop if inner loop didn't break
+                continue
+            # Break outer loop if inner loop broke
+            break
+        else:
+            # If no combination fits, use the shortest possible
+            adjective = sorted_adjectives[0][:1]  # Take just first letter if needed
+            animal = sorted_animals[0][:1]  # Take just first letter if needed
+    else:
+        # Normal case
+        adjective = random.choice(adjectives)
+        animal = random.choice(animals)
     
-    # If we couldn't generate a suitable nickname within constraints, adjust and try once more
-    adj = random.choice(adjectives)
-    animal = random.choice(animals)
+    # Calculate how much space we have left for the number
+    # Format: adjective_animal_number
+    base_length = len(adjective) + len(animal) + 2  # +2 for the underscores
     
-    # Truncate if needed to fit within max_length
-    if len(f"{adj}_{animal}_123") > max_length:
-        adj = adj[:max(3, max_length // 3)]
-        animal = animal[:max(3, max_length // 3)]
+    # Determine number range based on length constraints
+    if max_length < base_length + 1:  # Need at least 1 digit
+        # For extreme constraints, use single digit
+        max_length = base_length + 1
+        
+    max_number_length = max_length - base_length
+    max_number = 10 ** max_number_length - 1
     
-    number = random.randint(1, 999)
-    return f"{adj}_{animal}_{number}"
+    # Generate a random number
+    number = random.randint(1, min(9999, max_number))
+    
+    # Create the nickname
+    nickname = f"{adjective}_{animal}_{number}"
+    
+    # Check if it meets the minimum length requirement
+    if min_length > 0 and len(nickname) < min_length:
+        # If too short, use a longer number
+        digits_needed = min_length - base_length
+        if digits_needed > 0:
+            # Ensure number has at least digits_needed digits
+            min_number = max(10 ** (digits_needed - 1), 1)
+            number = random.randint(min_number, 10 ** digits_needed - 1)
+            nickname = f"{adjective}_{animal}_{number}"
+    
+    return nickname
 
 def is_valid_nickname(nickname: str) -> bool:
     """Check if a nickname follows the required format and constraints.
@@ -91,7 +121,7 @@ def is_valid_nickname(nickname: str) -> bool:
     adjective, animal, number = parts
     
     # Check reasonable lengths for each part
-    if len(adjective) < 2 or len(animal) < 2 or len(number) < 1:
+    if len(adjective) < 1 or len(animal) < 1 or len(number) < 1:
         return False
         
     # Check if number is actually a number

@@ -1,5 +1,5 @@
 """
-Tests for rate limiting functionality.
+Unit tests for rate limiting functionality without database dependencies.
 """
 import pytest
 from datetime import datetime, timedelta
@@ -79,13 +79,13 @@ def test_cleanup_removes_old_attempts():
     
     # Add some attempts
     now = datetime.now()
-    old_time = int((now - timedelta(seconds=400)).timestamp())  # Older than window
-    recent_time = int((now - timedelta(seconds=200)).timestamp())  # Within window
     
     with patch('datetime.datetime') as mock_datetime:
+        # Old attempt (outside window)
         mock_datetime.now.return_value = now - timedelta(seconds=400)
         limiter.record_attempt("test_key")
         
+        # Recent attempts (within window)
         mock_datetime.now.return_value = now - timedelta(seconds=200)
         limiter.record_attempt("test_key")
         

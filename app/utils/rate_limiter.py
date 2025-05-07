@@ -34,7 +34,7 @@ class RateLimiter:
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self.block_seconds = block_seconds
-        self._attempts: Dict[str, Dict[str, int]] = {}  # {key: {timestamp: count}}
+        self._attempts: Dict[str, Dict[datetime, int]] = {}  # {key: {timestamp: count}}
         self._blocked_until: Dict[str, datetime] = {}  # {key: blocked_until_timestamp}
         self._lock = Lock()  # Thread safety for in-memory storage
         
@@ -50,6 +50,8 @@ class RateLimiter:
             - is_limited: True if the key is rate limited, False otherwise
             - blocked_until: Datetime until which the key is blocked, or None if not blocked
         """
+        # Clean up old attempts first to ensure accurate counting
+        self._cleanup_old_attempts(key, datetime.now())
         with self._lock:
             now = datetime.now()
             
@@ -81,24 +83,28 @@ class RateLimiter:
     
     def record_attempt(self, key: str) -> None:
         """
-        Record an attempt for a key.
+        Record an attempt for the given key.
         
         Args:
             key: The key to record an attempt for
         """
+        now = datetime.now()
         with self._lock:
-            now = datetime.now()
-            timestamp = int(now.timestamp())
+            # Remove old attempts outside the time window
+            self._attempts[key] = {
+                timestamp: count 
+                for timestamp, count in self._attempts.get(key, {}).items()
+                if (now - timestamp).total_seconds() < self.window_seconds
+            }
             
-            # Initialize key if not exists
-            if key not in self._attempts:
-                self._attempts[key] = {}
+            # Record new attempt
+            current_minute = now.replace(second=0, microsecond=0)
+            self._attempts[key][current_minute] = self._attempts[key].get(current_minute, 0) + 1
             
-            # Record attempt
-            if timestamp in self._attempts[key]:
-                self._attempts[key][timestamp] += 1
-            else:
-                self._attempts[key][timestamp] = 1
+            # Check if we should block this key
+            total_attempts = sum(self._attempts[key].values())
+            if total_attempts >= self.max_attempts:
+                self._blocked_until[key] = now + timedelta(seconds=self.block_seconds)
     
     def reset(self, key: str) -> None:
         """
@@ -124,8 +130,8 @@ class RateLimiter:
         if key not in self._attempts:
             return
         
-        cutoff = int((now - timedelta(seconds=self.window_seconds)).timestamp())
-        self._attempts[key] = {ts: count for ts, count in self._attempts[key].items() if int(ts) >= cutoff}
+        cutoff = now - timedelta(seconds=self.window_seconds)
+        self._attempts[key] = {ts: count for ts, count in self._attempts[key].items() if ts >= cutoff}
         
         # Remove empty entries
         if not self._attempts[key]:
@@ -144,9 +150,13 @@ class RateLimiter:
         """
         if key not in self._attempts:
             return 0
-        
-        cutoff = int((now - timedelta(seconds=self.window_seconds)).timestamp())
-        return sum(count for ts, count in self._attempts[key].items() if int(ts) >= cutoff)
+            
+        cutoff = now - timedelta(seconds=self.window_seconds)
+        return sum(
+            count 
+            for timestamp, count in self._attempts[key].items() 
+            if timestamp >= cutoff
+        )
 
 # Global rate limiter instance
 login_rate_limiter = RateLimiter(max_attempts=5, window_seconds=300, block_seconds=3600)
