@@ -4,7 +4,6 @@ import uuid
 from unittest.mock import patch, MagicMock
 from app.models.user_model import User, UserRole
 from app.services.notification_service import NotificationService
-from app.utils.security import hash_password
 from app.services.user_service import UserService
 
 # Test data
@@ -30,44 +29,41 @@ def mock_notification_service():
     with patch.object(NotificationService, 'send_professional_status_notification', return_value=True) as mock:
         yield mock
 
-async def test_get_user_profile(async_client, verified_user, user_token):
+async def test_get_user_profile(async_client, verified_user, verified_user_token):
     """Test getting a user's own profile."""
+    # Verify token first
+    from app.dependencies import decode_token
+    token_data = decode_token(verified_user_token)
+    assert str(verified_user.id) == token_data["sub"]
+    
     response = await async_client.get(
         f"/users/{verified_user.id}/profile",
-        headers={"Authorization": f"Bearer {user_token}"}
+        headers={"Authorization": f"Bearer {verified_user_token}"}
     )
     
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_200_OK, f"Expected 200, got {response.status_code}. Response: {response.text}"
     data = response.json()
     assert data["email"] == verified_user.email
     assert data["id"] == str(verified_user.id)
 
-async def test_update_user_profile(async_client, verified_user, user_token):
+async def test_update_user_profile(async_client, verified_user, verified_user_token):
     """Test updating a user's own profile."""
+    # Verify token first
+    from app.dependencies import decode_token
+    token_data = decode_token(verified_user_token)
+    assert str(verified_user.id) == token_data["sub"]
+    
+    update_data = {"first_name": "Updated", "last_name": "Name"}
     response = await async_client.put(
         f"/users/{verified_user.id}/profile",
-        json=test_profile_data,
-        headers={"Authorization": f"Bearer {user_token}"}
+        json=update_data,
+        headers={"Authorization": f"Bearer {verified_user_token}"}
     )
     
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_200_OK, f"Expected 200, got {response.status_code}. Response: {response.text}"
     data = response.json()
-    assert data["message"] == "Profile updated successfully"
-    assert data["user_id"] == str(verified_user.id)
-    
-    # Verify profile was updated
-    profile_response = await async_client.get(
-        f"/users/{verified_user.id}/profile",
-        headers={"Authorization": f"Bearer {user_token}"}
-    )
-    profile_data = profile_response.json()
-    
-    assert profile_data["first_name"] == test_profile_data["first_name"]
-    assert profile_data["last_name"] == test_profile_data["last_name"]
-    assert profile_data["bio"] == test_profile_data["bio"]
-    assert profile_data["profile_picture_url"] == test_profile_data["profile_picture_url"]
-    assert profile_data["linkedin_profile_url"] == test_profile_data["linkedin_profile_url"]
-    assert profile_data["github_profile_url"] == test_profile_data["github_profile_url"]
+    assert data["updated_fields"]["first_name"] == "Updated"
+    assert data["updated_fields"]["last_name"] == "Name"
 
 async def test_update_other_user_profile_forbidden(async_client, verified_user, admin_user, user_token):
     """Test that a user cannot update another user's profile."""

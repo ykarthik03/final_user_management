@@ -24,7 +24,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.dependencies import get_current_user, get_db, get_email_service, require_role
+from app.dependencies import get_current_user, get_db, get_notification_service, get_email_service, require_role
 from app.schemas.pagination_schema import EnhancedPagination
 from app.schemas.token_schema import TokenResponse
 from app.schemas.user_schemas import LoginRequest, UserBase, UserCreate, UserListResponse, UserResponse, UserUpdate
@@ -284,50 +284,6 @@ async def update_user_profile(
     )
 
 
-@router.put("/users/{user_id}/professional-status", response_model=NotificationResponse, tags=["User Profile Management"])
-async def update_professional_status(
-    user_id: UUID, 
-    status_data: ProfessionalStatusUpdate, 
-    db: AsyncSession = Depends(get_db),
-    email_service: EmailService = Depends(get_email_service),
-    current_user: dict = Depends(require_role(["ADMIN", "MANAGER"]))
-):
-    """
-    Update a user's professional status.
-    
-    Only admins and managers can update professional status.
-    
-    - **user_id**: UUID of the user whose status is being updated
-    - **status_data**: ProfessionalStatusUpdate model with the new status
-    """
-    # Update the professional status
-    updated_user = await UserService.update_professional_status(
-        db, 
-        user_id, 
-        status_data.is_professional
-    )
-    
-    if not updated_user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    # Send notification to the user
-    notification_sent = await NotificationService.send_professional_status_notification(
-        db,
-        user_id,
-        email_service,
-        status_data.is_professional
-    )
-    
-    return NotificationResponse(
-        message="Professional status updated successfully",
-        user_id=updated_user.id,
-        notification_sent=notification_sent
-    )
-
-
 @router.get("/users/{user_id}/profile", response_model=UserResponse, tags=["User Profile Management"])
 async def get_user_profile(
     user_id: UUID, 
@@ -370,3 +326,50 @@ async def get_user_profile(
         updated_at=user.updated_at,
         links=create_user_links(user.id, request)
     )
+
+
+@router.put("/users/{user_id}/professional-status", response_model=dict)
+async def update_professional_status(
+    user_id: UUID,
+    status_data: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    notification_service: NotificationService = Depends(get_notification_service)
+):
+    """
+    Update a user's professional status (admin only)
+    """
+    # Check if current user is admin
+    if current_user.get("role") != "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can update professional status"
+        )
+    
+    # Get user from database
+    user = await UserService.get_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Update professional status
+    is_professional = status_data.get("is_professional", False)
+    user.update_professional_status(is_professional)
+    await db.commit()
+    await db.refresh(user)
+    
+    # Send notification
+    notification_sent = await notification_service.send_professional_status_notification(
+        db=db,
+        user_id=user.id,
+        email_service=get_email_service(),
+        is_professional=is_professional
+    )
+    
+    return {
+        "message": "Professional status updated successfully",
+        "user_id": str(user.id),
+        "notification_sent": notification_sent
+    }

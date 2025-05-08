@@ -8,6 +8,7 @@ from app.services.email_service import EmailService
 from app.services.jwt_service import decode_token
 from settings.config import Settings
 from fastapi import Depends
+# Import moved to function scope to avoid circular imports
 
 def get_settings() -> Settings:
     """Return application settings."""
@@ -42,7 +43,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     user_role: str = payload.get("role")
     if user_id is None or user_role is None:
         raise credentials_exception
-    return {"user_id": user_id, "role": user_role}
+    return {"sub": user_id, "role": user_role}
 
 def require_role(role: str):
     def role_checker(current_user: dict = Depends(get_current_user)):
@@ -50,3 +51,9 @@ def require_role(role: str):
             raise HTTPException(status_code=403, detail="Operation not permitted")
         return current_user
     return role_checker
+
+def get_notification_service():
+    """Return notification service instance."""
+    # Import here to avoid circular imports
+    from app.services.notification_service import NotificationService
+    return NotificationService()
