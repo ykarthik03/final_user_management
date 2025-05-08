@@ -52,16 +52,24 @@ class RateLimiter:
         """
         now = datetime.now()
         
-        # Check if key is blocked
-        if key in self._blocked_until:
-            if now < self._blocked_until[key]:
-                return True, self._blocked_until[key]
-            else:
-                # Block expired, remove it
-                del self._blocked_until[key]
-                # Also reset attempts for this key to avoid immediate re-blocking
-                if key in self._attempts:
-                    del self._attempts[key]
+        # Use thread lock to ensure consistent state
+        with self._lock:
+            # Check if key is blocked
+            if key in self._blocked_until:
+                if now < self._blocked_until[key]:
+                    # Still blocked
+                    return True, self._blocked_until[key]
+                else:
+                    # Block expired, remove it and its associated attempts
+                    logger.debug(f"Block expired for key {key}. Clearing attempts.")
+                    del self._blocked_until[key]
+                    if key in self._attempts: 
+                        del self._attempts[key]
+            
+            # If key doesn't exist in attempts dictionary (e.g., new key or block just expired and attempts cleared),
+            # it's not rate limited by current ongoing attempts.
+            if key not in self._attempts:
+                return False, None
         
         # Clean up old attempts
         self._cleanup(key, now)
@@ -90,16 +98,17 @@ class RateLimiter:
         """
         now = datetime.now()
         with self._lock:
-            # Initialize attempts dictionary if not exists
+            # Ensure the key's primary dict exists if it's a completely new key
             if key not in self._attempts:
                 self._attempts[key] = {}
-                
-            # Remove old attempts outside the time window
-            self._attempts[key] = {
-                timestamp: count 
-                for timestamp, count in self._attempts[key].items()
-                if (now - timestamp).total_seconds() < self.window_seconds
-            }
+            
+            # Clean up old attempts. This might remove self._attempts[key] if all its sub-entries expire.
+            self._cleanup(key, now)
+            
+            # If _cleanup removed the key because all its old attempts expired,
+            # we need to re-initialize it for the new current attempt.
+            if key not in self._attempts:
+                self._attempts[key] = {}
             
             # Record new attempt
             current_minute = now.replace(second=0, microsecond=0)

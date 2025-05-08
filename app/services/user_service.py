@@ -176,11 +176,9 @@ class UserService:
         if not verify_password(password, user.hashed_password):
             print(f"Authentication failed: Invalid password for user {username}")
             user.failed_login_attempts += 1
-            user.last_failed_login = datetime.now(timezone.utc)
             
             if user.failed_login_attempts >= get_settings().max_login_attempts:  
                 user.is_locked = True
-                user.locked_until = datetime.now(timezone.utc) + get_settings().lockout_duration  
                 print(f"User {username} locked due to too many failed login attempts")
             
             await db.commit()
@@ -192,19 +190,15 @@ class UserService:
             )
         
         if user.is_locked:
-            if user.locked_until and user.locked_until > datetime.now(timezone.utc):
-                print(f"Login attempt for locked account: {username}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED, 
-                    detail=f"Account is locked until {user.locked_until}. Contact support if this is an error.",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            else:
-                user.is_locked = False
-                user.locked_until = None
+            print(f"Login attempt for locked account: {username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="Account is locked. Contact support if this is an error.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         
         user.failed_login_attempts = 0
-        user.last_login = datetime.now(timezone.utc)
+        user.last_login_at = datetime.now(timezone.utc)
         await db.commit()
         
         login_rate_limiter.reset(rate_limit_key)
