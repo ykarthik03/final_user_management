@@ -113,9 +113,9 @@ async def locked_user(db_session):
         "email": unique_email,
         "hashed_password": hash_password("MySuperPassword$1234"),
         "role": UserRole.AUTHENTICATED,
-        "email_verified": False,
+        "email_verified": True,  # Set to True to ensure account lock is checked
         "is_locked": True,
-        "failed_login_attempts": settings.max_login_attempts,
+        "failed_login_attempts": settings.max_login_attempts + 1,  # Ensure it's above the threshold
     }
     user = User(**user_data)
     db_session.add(user)
